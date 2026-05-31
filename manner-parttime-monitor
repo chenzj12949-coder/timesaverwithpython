@@ -1,0 +1,104 @@
+import requests
+import time
+import random
+import urllib.parse
+import urllib3
+
+# 禁用因关闭 SSL 验证而产生的控制台警告信息
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# ================= 配置区域 =================
+BARK_KEYS = ["x1", "x2", "x3"] 
+
+# 🌟 核心配置：心仪门店白名单（已移除距离过滤）
+MY_STORES = ["武汉泰然南湖玫瑰湾", "武汉光谷K11", "武汉世界城广场", "武汉琨瑜国际中心大堂"]
+
+# 1. 规范化后的服务器端 Headers
+HEADERS = { }
+    
+
+# 2. 静态原始字符串
+RAW_PAYLOAD = { }
+
+# ===========================================
+
+def send_bark(title, content):
+    current_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+    t = urllib.parse.quote(str(title))
+    c = urllib.parse.quote(str(content))
+    
+    for key in BARK_KEYS:
+        key = key.strip()
+        if not key:
+            continue
+            
+        url = f"https://api.day.app/{key}/{t}/{c}?group=Manner&icon=https://oss-img.qtshe.com/oss1683770526491_199.png"
+        try:
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200:
+                print(f"[{current_time}] Bark 推送成功 -> 密钥尾号: ...{key[-6:]}")
+            else:
+                print(f"[{current_time}] Bark 返回状态码异常 [{r.status_code}] -> 密钥尾号: ...{key[-6:]}")
+        except Exception as e:
+            print(f"[{current_time}] Bark 请求异常 [{e}] -> 密钥尾号: ...{key[-6:]}")
+
+
+def check_jobs():
+    current_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+    try:
+        data_bytes = RAW_PAYLOAD.encode('utf-8')
+        
+        response = requests.post(
+            "https://api.linggongguanjia.com/qtbResumeSource/api/worker/job-recommend/agg/jobListView/v2",
+            headers=HEADERS,
+            data=data_bytes,
+            timeout=(5, 25),
+            verify=False  # 🌟 核心修复 1：强制绕过 SSL 证书握手校验，防止被直接掐断
+        )
+        
+        res_json = response.json()
+        
+        if not res_json.get("success"):
+            print(f"[{current_time}] 服务器返回错误: {res_json.get('msg')}")
+            return
+
+        results = res_json.get('data', {}).get('pageData', {}).get('results', [])
+        print(f"[{current_time}] 成功获取 {len(results)} 条岗位信息")
+
+        for job in results:
+            brand = job.get('brandName', '')
+            store_name = job.get('storeName', '')
+            dist = job.get('distanceTotal', 99.0)
+            
+            if "MANNER" in brand.upper():
+                if any(target_store in store_name for target_store in MY_STORES):
+                    shifts = job.get('shifts', [])
+                    for s in shifts:
+                        if s.get('arrangeCount') == 0:
+                            date_str = time.strftime('%m-%d', time.localtime(s['date']/1000))
+                            title = f"☕️ {store_name}"
+                            body = f"距离:{dist:.1f}km\n日期:{date_str}\n时段:{s.get('arrangedTimeStartToEnd')}\n薪资:{s.get('allTotalSalary')}元"
+                            send_bark(title, body)
+
+    except requests.exceptions.Timeout:
+        print(f"[{current_time}] 网络警告: 跨境链路读取超时，等待下一轮轮询自动重试。")
+    except Exception as e:
+        print(f"[{current_time}] 网络异常捕获: {e}")
+
+if __name__ == "__main__":
+    start_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+    print(f"[{start_time}] Manner 精准门店监控启动...")
+    send_bark("监控启动", "Manner 定向机器人已上线")
+    
+    while True:
+        check_jobs()
+        
+        # 🌟 核心修复 2：引入随机休眠时间（100s 到 150s 之间），大幅降低被 WAF 识别的概率
+        sleep_time = random.uniform(45, 100)
+        now = time.time()
+        next_run_str = time.strftime('%H:%M:%S', time.localtime(now + sleep_time))
+        
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 本轮查询结束。随机休眠 {sleep_time:.1f} 秒，防封控启动...")
+        print(f"[*] 预计下一次查询时间: {next_run_str}\n" + "-"*40)
+        
+        time.sleep(sleep_time)
